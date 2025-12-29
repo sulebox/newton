@@ -18,14 +18,14 @@ const GRAVITY = 0.005;
 const GROUND_Y = 0.1;
 const APPLE_SPAWN_CENTER = new THREE.Vector3(0.5, 3.6, -0.5);
 
-// Newtonのリアクション状態の型
 type NewtonReaction = 'idle' | 'hatena' | 'turnAndInspiration';
 
 // ゲームの状態管理用コンテキスト
 interface GameContextType {
   newtonReaction: NewtonReaction;
   triggerReaction: () => void;
-  isBottomBubbleVisible: boolean;
+  resetReaction: () => void; // 追加: 状態リセット用
+  isPlaying: boolean;        // 追加: アニメーション再生中フラグ
 }
 const GameContext = createContext<GameContextType>({} as GameContextType);
 
@@ -34,27 +34,30 @@ const GameContext = createContext<GameContextType>({} as GameContextType);
 // =========================================================
 function GameProvider({ children }: { children: React.ReactNode }) {
   const [newtonReaction, setNewtonReaction] = useState<NewtonReaction>('idle');
-  const [isBottomBubbleVisible, setIsBottomBubbleVisible] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   const triggerReaction = () => {
-    // 1) 画面下の吹き出しを表示
-    setIsBottomBubbleVisible(true);
-    // 3秒後に消す
-    setTimeout(() => setIsBottomBubbleVisible(false), 3000);
+    if (isPlaying) return; // 再生中は無視
 
-    // 2) & 3) 確率でNewtonのアクションを決定
+    setIsPlaying(true); // 再生開始ロック
+
+    // 確率でアクション決定
     const rand = Math.random();
     if (rand < 0.8) {
-      // 8割: hatena
       setNewtonReaction('hatena');
     } else {
-      // 2割: rightturn -> inspiration
       setNewtonReaction('turnAndInspiration');
     }
   };
 
+  // アニメーション完了時に呼ばれるリセット関数
+  const resetReaction = () => {
+    setNewtonReaction('idle');
+    setIsPlaying(false); // ロック解除
+  };
+
   return (
-    <GameContext.Provider value={{ newtonReaction, triggerReaction, isBottomBubbleVisible }}>
+    <GameContext.Provider value={{ newtonReaction, triggerReaction, resetReaction, isPlaying }}>
       {children}
     </GameContext.Provider>
   );
@@ -133,21 +136,22 @@ function Neco({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 3. Newton (アクション制御を追加)
+// 3. Newton (修正: 完了通知と状態リセットの実装)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
   const { scene, animations } = useGLTF('/models/newton.glb');
   const { actions } = useAnimations(animations, group);
-  const { newtonReaction } = useGame(); // Contextから状態を取得
+  const { newtonReaction, resetReaction } = useGame(); 
   const [showQuestionBubble, setShowQuestionBubble] = useState(false);
   const currentAction = useRef<THREE.AnimationAction | null>(null);
 
-  // アニメーション再生用ヘルパー
   const playAction = (name: string, duration: number = 0.5) => {
     const newAction = actions[name];
     if (!newAction) return;
-    if (currentAction.current) currentAction.current.fadeOut(duration);
+    if (currentAction.current && currentAction.current !== newAction) {
+      currentAction.current.fadeOut(duration);
+    }
     newAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(duration).play();
     currentAction.current = newAction;
   };
@@ -161,32 +165,36 @@ function Newton({ position }: { position: [number, number, number] }) {
     });
   }, [scene]);
 
-  // リアクション状態の変化を監視してアニメーションを実行
   useEffect(() => {
     let timeout1: NodeJS.Timeout;
     let timeout2: NodeJS.Timeout;
 
     if (newtonReaction === 'hatena') {
-      // 2) 8割: hatena を4秒流す + 「？」吹き出し
+      // パターンA: hatena (4秒)
       playAction('hatena');
       setShowQuestionBubble(true);
+      
       timeout1 = setTimeout(() => {
         playAction('idle');
         setShowQuestionBubble(false);
+        resetReaction(); // ★完了を通知（これでボタンが再度押せるようになる）
       }, 4000);
 
     } else if (newtonReaction === 'turnAndInspiration') {
-      // 3) 2割: rightturn(1.7s) -> inspiration(6s)
+      // パターンB: rightturn(1.7s) -> inspiration(6s)
       playAction('rightturn');
+      
       timeout1 = setTimeout(() => {
         playAction('inspiration');
+        
         timeout2 = setTimeout(() => {
           playAction('idle');
+          resetReaction(); // ★完了を通知
         }, 6000);
       }, 1700);
       
     } else {
-      // idle状態 (初期状態または完了後)
+      // idle状態
       playAction('idle');
       setShowQuestionBubble(false);
     }
@@ -195,7 +203,8 @@ function Newton({ position }: { position: [number, number, number] }) {
       clearTimeout(timeout1);
       clearTimeout(timeout2);
     };
-  }, [newtonReaction, actions]); // newtonReactionが変化するたびに実行
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newtonReaction]); 
 
   return (
     <group ref={group} position={position}>
@@ -284,27 +293,37 @@ function ApplesController() {
 // UIコンポーネント (ボタンと画面下の吹き出し)
 // =========================================================
 function UIOverlay() {
-  const { triggerReaction, isBottomBubbleVisible } = useGame();
+  const { triggerReaction, isPlaying } = useGame();
+  
+  // 吹き出しの表示制御：アニメーション再生中（isPlaying）だけ表示する
+  const showBubble = isPlaying;
+
   return (
     <>
       {/* 画面右下のボタン */}
       <button
         onClick={triggerReaction}
+        disabled={isPlaying} // アニメーション中はボタンを無効化
         style={{
           position: 'absolute', bottom: '20px', right: '20px', zIndex: 20,
-          padding: '12px 24px', backgroundColor: '#ff6e6e', color: 'white', border: 'none',
-          borderRadius: '30px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer',
-          boxShadow: '0 4px 6px rgba(0,0,0,0.2)'
+          padding: '12px 24px', 
+          backgroundColor: isPlaying ? '#ccc' : '#ff6e6e', // 無効時はグレー
+          color: 'white', border: 'none',
+          borderRadius: '30px', fontSize: '16px', fontWeight: 'bold', 
+          cursor: isPlaying ? 'default' : 'pointer', // カーソルも変更
+          boxShadow: isPlaying ? 'none' : '0 4px 6px rgba(0,0,0,0.2)',
+          transform: isPlaying ? 'scale(0.95)' : 'scale(1)',
+          transition: 'all 0.2s ease'
         }}
       >
-        後ろに注意！
+        ニュートンうしろー！
       </button>
       
       {/* 画面中央下の吹き出し */}
       <div style={{
         position: 'absolute', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
         zIndex: 15, pointerEvents: 'none',
-        opacity: isBottomBubbleVisible ? 1 : 0, transition: 'opacity 0.3s ease-in-out'
+        opacity: showBubble ? 1 : 0, transition: 'opacity 0.3s ease-in-out'
       }}>
         <div style={{...bubbleStyle, fontSize: '18px', padding: '10px 20px', backgroundColor: '#fff0f0'}}>
           ニュートンうしろー！
@@ -366,7 +385,7 @@ function AppContent() {
         </Suspense>
       </Canvas>
       
-      {/* UIレイヤーを追加 */}
+      {/* UIレイヤー */}
       <UIOverlay />
     </div>
   );
@@ -374,7 +393,6 @@ function AppContent() {
 
 export default function Home() {
   return (
-    // 全体をProviderで囲む
     <GameProvider>
       <AppContent />
     </GameProvider>
