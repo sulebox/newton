@@ -1,22 +1,22 @@
 'use client';
 
-import React, { useState, useEffect, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useRef, Suspense, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { useGLTF, useAnimations, Html, OrthographicCamera, ContactShadows } from '@react-three/drei';
 import * as THREE from 'three';
 
-// モデルをプリロードしておく
+// モデルをプリロード
 useGLTF.preload('/models/tree.glb');
 useGLTF.preload('/models/neco.glb');
 useGLTF.preload('/models/newton.glb');
-useGLTF.preload('/models/apple.glb'); // 追加
+useGLTF.preload('/models/apple.glb');
 
 // =========================================================
 // 定数
 // =========================================================
-const GRAVITY = 0.005; // 重力加速度（簡易値）
-const GROUND_Y = 0.1; // 地面の高さ
-const APPLE_SPAWN_CENTER = new THREE.Vector3(0.5, 3.6, -0.5); // リンゴの出現基準点
+const GRAVITY = 0.005; 
+const GROUND_Y = 0.1; 
+const APPLE_SPAWN_CENTER = new THREE.Vector3(0.5, 3.6, -0.5); 
 
 // =========================================================
 // 1. 背景と木
@@ -66,14 +66,12 @@ function Neco({ position }: { position: [number, number, number] }) {
     let timeoutId: NodeJS.Timeout;
     const scheduleMeow = () => {
       const randomInterval = Math.random() * 7000 + 8000;
-      
       timeoutId = setTimeout(() => {
         setShowBubble(true);
         setTimeout(() => setShowBubble(false), 3000);
         scheduleMeow();
       }, randomInterval);
     };
-
     scheduleMeow();
     return () => clearTimeout(timeoutId);
   }, [scene]);
@@ -102,7 +100,7 @@ function Neco({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 3. Newton (idleループに変更)
+// 3. Newton
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -117,10 +115,8 @@ function Newton({ position }: { position: [number, number, number] }) {
       }
     });
 
-    // "idle" アニメーションをループ再生
     const idleAction = actions['idle'];
     if (idleAction) {
-      // reset()で開始状態に戻し、play()で再生。ループはデフォルトで有効。
       idleAction.reset().fadeIn(0.5).play();
     }
   }, [actions, animations, scene]);
@@ -129,68 +125,64 @@ function Newton({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 4. Apple (新規追加: 落下するリンゴ)
+// 4. Apple (修正版: クローン対応 & 影設定)
 // =========================================================
 function Apple({ startPos, endZOffset }: { startPos: THREE.Vector3, endZOffset: number }) {
   const group = useRef<THREE.Group>(null);
   const { scene } = useGLTF('/models/apple.glb');
+
+  // ★重要: シーンをクローンして、個別のリンゴとして扱えるようにする
+  const clonedScene = useMemo(() => scene.clone(), [scene]);
   
   const position = useRef(startPos.clone());
   const velocity = useRef(new THREE.Vector3(0, 0, 0));
   const isLanded = useRef(false);
   
-  // 最終的な着地点（Yは地面、X,Zは開始位置から少しずらす）
-  const targetEndY = GROUND_Y + Math.random() * 0.1; // 少し高さをばらつかせる
+  const targetEndY = GROUND_Y + Math.random() * 0.1;
   const targetEndX = startPos.x + (Math.random() - 0.5) * 0.5;
   const targetEndZ = startPos.z + endZOffset;
+
+  // ★重要: 影の設定（receiveShadow = false にして影がかからないようにする）
+  useEffect(() => {
+    clonedScene.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        child.castShadow = true;    // 地面に影は落とす
+        child.receiveShadow = false; // 木などの影は受けない（明るいまま）
+      }
+    });
+  }, [clonedScene]);
 
   useFrame((state, delta) => {
     if (isLanded.current || !group.current) return;
 
-    // 時間調整係数（フレームレート依存を軽減）
     const timeScale = delta * 60;
-
-    // 重力を速度に加算 (v = v0 + at)
     velocity.current.y -= GRAVITY * timeScale;
-
-    // 速度を位置に加算 (x = x0 + vt)
     position.current.add(velocity.current.clone().multiplyScalar(timeScale));
-
-    // XZ平面でのわずかな移動（真下に落ちすぎないように）
     position.current.x += (targetEndX - position.current.x) * 0.02 * timeScale;
     position.current.z += (targetEndZ - position.current.z) * 0.02 * timeScale;
 
-    // 着地判定
     if (position.current.y <= targetEndY) {
       position.current.y = targetEndY;
       isLanded.current = true;
-      // 着地時に少し回転を加えて自然に見せる
       group.current.rotation.set(
         Math.random() * Math.PI,
         Math.random() * Math.PI,
         Math.random() * Math.PI
       );
     }
-
     group.current.position.copy(position.current);
   });
 
+  // 初期位置
   useEffect(() => {
-    scene.traverse((child) => {
-      if ((child as THREE.Mesh).isMesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-    // 初期位置設定
     if(group.current) group.current.position.copy(startPos);
-  }, [scene, startPos]);
+  }, [startPos]);
 
-  return <primitive ref={group} object={scene} scale={1.2} />;
+  return <primitive ref={group} object={clonedScene} scale={1.2} />;
 }
 
 // =========================================================
-// 5. ApplesController (新規追加: リンゴを生成管理)
+// 5. ApplesController
 // =========================================================
 function ApplesController() {
   const [apples, setApples] = useState<{ id: number, start: THREE.Vector3, offset: number }[]>([]);
@@ -199,25 +191,20 @@ function ApplesController() {
     let timeoutId: NodeJS.Timeout;
 
     const spawnApple = () => {
-      // 出現位置を基準点から少しランダムにずらす
       const start = new THREE.Vector3(
         APPLE_SPAWN_CENTER.x + (Math.random() - 0.5) * 0.8,
         APPLE_SPAWN_CENTER.y + (Math.random() - 0.5) * 0.2,
         APPLE_SPAWN_CENTER.z + (Math.random() - 0.5) * 0.8
       );
-      // 着地点のZオフセットもランダムにして重なりを防ぐ
       const offset = (Math.random() - 0.5) * 1.5;
 
       setApples(prev => [...prev, { id: Date.now(), start, offset }]);
 
-      // 次の生成時間をランダムに設定 (3秒〜10秒)
       const nextInterval = Math.random() * (10000 - 3000) + 3000;
       timeoutId = setTimeout(spawnApple, nextInterval);
     };
 
-    // 初回スタート
     spawnApple();
-
     return () => clearTimeout(timeoutId);
   }, []);
 
@@ -229,7 +216,6 @@ function ApplesController() {
     </>
   );
 }
-
 
 // =========================================================
 // メインページ
@@ -268,7 +254,6 @@ export default function Home() {
           <SceneEnvironment />
           <Neco position={[0, 0, -2.5]} />
           <Newton position={[1.5, 0, 2.5]} />
-          {/* リンゴ管理コンポーネントを追加 */}
           <ApplesController />
         </Suspense>
       </Canvas>
