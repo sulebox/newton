@@ -135,7 +135,7 @@ function Neco({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 3. Newton (修正版: チラつき完全防止 & セリフ変更)
+// 3. Newton (修正版: ループ防止 & チラつき防止)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -158,7 +158,18 @@ function Newton({ position }: { position: [number, number, number] }) {
       currentAction.current.fadeOut(duration);
     }
     
-    newAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(duration).play();
+    newAction.reset().setEffectiveTimeScale(1).setEffectiveWeight(1);
+
+    // ★修正: 「rightturn」の時だけループさせない設定にする
+    if (name === 'rightturn') {
+      newAction.setLoop(THREE.LoopOnce, 1); // 1回だけ再生
+      newAction.clampWhenFinished = true;   // 終わったらそのポーズで止まる
+    } else {
+      newAction.setLoop(THREE.LoopRepeat, Infinity); // 他はループ
+      newAction.clampWhenFinished = false;
+    }
+
+    newAction.fadeIn(duration).play();
     currentAction.current = newAction;
   };
 
@@ -190,12 +201,11 @@ function Newton({ position }: { position: [number, number, number] }) {
     } else if (newtonReaction === 'turnAndInspiration') {
       // --- パターンB: ターン -> ひらめき -> 戻りターン ---
       
-      // 1. 最初のターン開始
+      // 1. 最初のターン開始 (rightturnはLoopOnce設定済み)
       playAction('rightturn');
       
       timeout1 = setTimeout(() => {
-        // ★修正: アニメーションをフェードアウトさせずに「即死」させる
-        // これで「アニメの180度」がなくなり、同時に「本体の180度」が入るので、見た目は動かない
+        // アニメーションを即停止して、物理回転にバトンタッチ
         if (actions['rightturn']) actions['rightturn'].stop();
         if (currentAction.current === actions['rightturn']) currentAction.current = null;
 
@@ -212,7 +222,7 @@ function Newton({ position }: { position: [number, number, number] }) {
           playAction('rightturn');
 
           timeout3 = setTimeout(() => {
-            // ★修正: 戻る時も即停止
+            // 戻りターンも即停止
             if (actions['rightturn']) actions['rightturn'].stop();
             if (currentAction.current === actions['rightturn']) currentAction.current = null;
 
@@ -255,7 +265,6 @@ function Newton({ position }: { position: [number, number, number] }) {
         </Html>
       )}
 
-      {/* セリフ変更: 「引っ張られてたのかー！」 */}
       {showGravityBubble && (
         <Html position={[0, 2.7, 0]} center>
           <div style={{...bubbleStyle, fontSize: '14px', padding: '10px 14px', backgroundColor: '#fffacd'}}>
@@ -337,17 +346,15 @@ function ApplesController() {
 }
 
 // =========================================================
-// UIコンポーネント (ボタンと画面下の吹き出し)
+// UIコンポーネント
 // =========================================================
 function UIOverlay() {
   const { triggerReaction, isPlaying } = useGame();
   
-  // 吹き出し表示: アニメーション中のみ
   const showBubble = isPlaying;
 
   return (
     <>
-      {/* 画面右下のボタン */}
       <button
         onClick={triggerReaction}
         disabled={isPlaying} 
@@ -366,7 +373,6 @@ function UIOverlay() {
         ニュートンに知らせる
       </button>
       
-      {/* 画面中央下の吹き出し */}
       <div style={{
         position: 'absolute', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
         zIndex: 15, pointerEvents: 'none',
@@ -396,7 +402,7 @@ const bubbleArrowStyle: React.CSSProperties = {
 };
 
 // =========================================================
-// メインページ (これが無いとエラーになります！)
+// メインページ
 // =========================================================
 function AppContent() {
   const [zoom, setZoom] = useState(80);
@@ -437,7 +443,6 @@ function AppContent() {
   );
 }
 
-// ★この export default が最も重要です
 export default function Home() {
   return (
     <GameProvider>
