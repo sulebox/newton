@@ -134,8 +134,9 @@ function Neco({ position }: { position: [number, number, number] }) {
   );
 }
 
+
 // =========================================================
-// 3. Newton (修正版: 時間1.633秒 & 戻りチラつき防止の隠し味追加)
+// 3. Newton (修正版: 往路・復路ともに「即時切り替え」を徹底)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -148,31 +149,30 @@ function Newton({ position }: { position: [number, number, number] }) {
   
   const currentAction = useRef<THREE.AnimationAction | null>(null);
 
-  // ★ご要望通り、アニメーションの長さを正確に設定
+  // アニメーション時間 (1.633秒)
   const TURN_DURATION = 1633; 
 
   const playAction = (name: string, duration: number = 0.2) => {
     const newAction = actions[name];
     if (!newAction) return;
     
-    // クロスフェード処理
+    // ★ここが修正ポイント: duration=0 (即時) なら、前のアクションはフェードアウト待たずに即抹殺
     if (currentAction.current && currentAction.current !== newAction) {
       if (duration > 0) {
         currentAction.current.fadeOut(duration);
       } else {
-        // 即時切り替えの場合は、前の動作を即停止
-        currentAction.current.stop();
+        currentAction.current.stop(); // 即停止！
       }
     }
     
     // 設定リセット
     newAction.reset();
     newAction.setEffectiveTimeScale(1);
-    newAction.setEffectiveWeight(1);
+    newAction.setEffectiveWeight(1); // ★ウェイト100%を強制
 
     if (name === 'rightturn') {
       newAction.setLoop(THREE.LoopOnce, 1); 
-      newAction.clampWhenFinished = true; // 終わったら最後の姿勢で待機
+      newAction.clampWhenFinished = true;
     } else {
       newAction.setLoop(THREE.LoopRepeat, Infinity);
       newAction.clampWhenFinished = false;
@@ -181,7 +181,7 @@ function Newton({ position }: { position: [number, number, number] }) {
     if (duration > 0) {
       newAction.fadeIn(duration).play();
     } else {
-      newAction.play();
+      newAction.play(); // ★即再生（最初のフレームからウェイト100%）
     }
     
     currentAction.current = newAction;
@@ -219,32 +219,28 @@ function Newton({ position }: { position: [number, number, number] }) {
       playAction('rightturn', 0.2); 
       
       timeout1 = setTimeout(() => {
-        // 2. 物理的に後ろを向く (即時切り替え)
+        // 2. 物理的に後ろを向く
         if (group.current) group.current.rotation.y += Math.PI; 
+        
+        // ★往路の切り替え: 即時100% (duration: 0)
         playAction('inspiration', 0); 
         
         setShowGravityBubble(true);
         
         timeout2 = setTimeout(() => {
-          // 3. 戻りターン開始 (即時切り替え)
+          // 3. 戻りターン開始
           setShowGravityBubble(false);
+          // ★ここも即時切り替えにしてみる (duration: 0)
+          // inspiration と rightturn のつなぎ目でズレるなら、ここも0にするのが正解です
           playAction('rightturn', 0); 
 
           timeout3 = setTimeout(() => {
-            // ★ここが修正ポイント: チラつき防止の「一瞬透明化」
-            // 処理順序: 隠す -> 回転戻す -> アニメ戻す -> 表示する
-            if (group.current) group.current.visible = false;
-
             // 4. 物理的に前を向く
             if (group.current) group.current.rotation.y -= Math.PI; 
             
-            // アイドルへ戻る (即時)
+            // ★復路の切り替え: 即時100% (duration: 0)
+            // これで「前のrightturn」は即stopされ、「idle」が即100%で入る
             playAction('idle', 0);
-            
-            // 次の描画フレームには間に合うようにすぐ戻す（人間の目には見えない）
-            requestAnimationFrame(() => {
-                if (group.current) group.current.visible = true;
-            });
             
             resetReaction();
           }, TURN_DURATION);
@@ -288,6 +284,8 @@ function Newton({ position }: { position: [number, number, number] }) {
     </group>
   );
 }
+
+
 
 // =========================================================
 // 4. Apple
