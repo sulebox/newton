@@ -135,7 +135,7 @@ function Neco({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 3. Newton (修正版: 正攻法のクロスフェード実装)
+// 3. Newton (修正版: 回転時はフェードなし即時切り替え)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -148,22 +148,23 @@ function Newton({ position }: { position: [number, number, number] }) {
   
   const currentAction = useRef<THREE.AnimationAction | null>(null);
 
-  // 時間調整: 少しだけ短めにして切り替えをスムーズに
+  // 時間調整: ほぼピッタリの時間
   const TURN_DURATION = 1580; 
 
+  // 第二引数でフェード時間（秒）を指定できるようにする
   const playAction = (name: string, duration: number = 0.2) => {
     const newAction = actions[name];
     if (!newAction) return;
     
-    // ★ここが重要: stop()せず、前のアクションをフェードアウトさせる
-    // これにより、常にどちらかのアクションが有効になり、Tポーズが一瞬たりとも見えなくなる
+    // 違うアクションならフェードアウト
     if (currentAction.current && currentAction.current !== newAction) {
+      // もしdurationが0なら、フェードアウトも即時（0）にする
       currentAction.current.fadeOut(duration);
     }
     
     newAction.reset();
     newAction.setEffectiveTimeScale(1);
-    newAction.setEffectiveWeight(1);
+    newAction.setEffectiveWeight(1); // ここで強制的にウェイト1にする
 
     if (name === 'rightturn') {
       newAction.setLoop(THREE.LoopOnce, 1); 
@@ -173,8 +174,13 @@ function Newton({ position }: { position: [number, number, number] }) {
       newAction.clampWhenFinished = false;
     }
 
-    // 新しいアクションをフェードイン
-    newAction.fadeIn(duration).play();
+    // durationが0なら即再生、それ以外ならfadeInを使う
+    if (duration > 0) {
+      newAction.fadeIn(duration).play();
+    } else {
+      newAction.play(); // フェードなしで即座に適用
+    }
+    
     currentAction.current = newAction;
   };
 
@@ -194,11 +200,11 @@ function Newton({ position }: { position: [number, number, number] }) {
 
     if (newtonReaction === 'hatena') {
       // --- パターンA: hatena ---
-      playAction('hatena');
+      playAction('hatena', 0.2);
       setShowQuestionBubble(true);
       
       timeout1 = setTimeout(() => {
-        playAction('idle');
+        playAction('idle', 0.2);
         setShowQuestionBubble(false);
         resetReaction();
       }, 4000);
@@ -206,29 +212,34 @@ function Newton({ position }: { position: [number, number, number] }) {
     } else if (newtonReaction === 'turnAndInspiration') {
       // --- パターンB: ターン -> ひらめき -> 戻りターン ---
       
-      // 1. 最初のターン開始
+      // 1. 最初のターン開始（ここはアイドルからの変化なのでフェードありでOK）
       playAction('rightturn', 0.2); 
       
       timeout1 = setTimeout(() => {
-        // ★修正: visible切り替えやstop()のハックを全削除
-        // 物理的に後ろを向く（これとクロスフェードが混ざることで、くるっと回るように見えるのを防ぐ）
+        // 2. 物理的に後ろを向く
         if (group.current) group.current.rotation.y += Math.PI; 
         
-        // ひらめき再生（自動的にrightturnをフェードアウトしてくれる）
-        playAction('inspiration', 0.2);
+        // ★重要: ここを「0秒」にする！
+        // 箱が180度回った瞬間に、ポーズも即座に「正面向き(ひらめき)」にしないと、
+        // フェード中の数フレームだけ「後ろ向き(turnの終わり)」が混ざって、結果的に一瞬正面を向いてしまう
+        playAction('inspiration', 0); 
+        
         setShowGravityBubble(true);
         
         timeout2 = setTimeout(() => {
           // 3. ひらめき完了: 戻りターン開始
+          // ここはポーズのつながりが自然ならフェードありでもいいが、念のため短めに
           setShowGravityBubble(false);
-          playAction('rightturn', 0.2);
+          playAction('rightturn', 0); // ここも即時切り替えの方が安全
 
           timeout3 = setTimeout(() => {
             // 4. 物理的に前を向く
             if (group.current) group.current.rotation.y -= Math.PI; 
             
-            // アイドルへ戻る
-            playAction('idle', 0.5);
+            // ★重要: ここも「0秒」にする！
+            // 箱を戻した瞬間に、即座にアイドル（正面）に戻す
+            playAction('idle', 0);
+            
             resetReaction();
           }, TURN_DURATION);
 
@@ -237,7 +248,7 @@ function Newton({ position }: { position: [number, number, number] }) {
       
     } else {
       // idle状態
-      playAction('idle');
+      playAction('idle', 0.2);
       setShowQuestionBubble(false);
       setShowGravityBubble(false);
     }
@@ -253,7 +264,6 @@ function Newton({ position }: { position: [number, number, number] }) {
   return (
     <group ref={group} position={position}>
       <primitive object={scene} scale={1.8} />
-      
       {showQuestionBubble && (
         <Html position={[0, 2.6, 0]} center>
           <div style={{...bubbleStyle, fontSize: '24px', padding: '8px 16px'}}>
@@ -262,7 +272,6 @@ function Newton({ position }: { position: [number, number, number] }) {
           </div>
         </Html>
       )}
-
       {showGravityBubble && (
         <Html position={[0, 2.7, 0]} center>
           <div style={{...bubbleStyle, fontSize: '14px', padding: '10px 14px', backgroundColor: '#fffacd'}}>
