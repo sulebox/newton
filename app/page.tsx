@@ -139,50 +139,20 @@ function Neco({ position }: { position: [number, number, number] }) {
 // 3. Newton (吹き出し修正)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
-  const group = useRef<THREE.Group>(null);
+  const pivot = useRef<THREE.Group>(null); // ← 回転担当（物理的な向き）
+  const rig = useRef<THREE.Group>(null);   // ← アニメ担当（mixerの対象）
+
   const { scene, animations } = useGLTF('/models/newton.glb');
-  const { actions } = useAnimations(animations, group);
-  const { newtonReaction, resetReaction } = useGame(); 
-  
+  const { actions, mixer } = useAnimations(animations, rig);
+  const { newtonReaction, resetReaction } = useGame();
+
   const [showQuestionBubble, setShowQuestionBubble] = useState(false);
   const [showGravityBubble, setShowGravityBubble] = useState(false);
-  
+
   const currentAction = useRef<THREE.AnimationAction | null>(null);
+  const phase = useRef<'idle' | 'turnOut' | 'inspire' | 'turnBack' | 'hatena'>('idle');
 
-  const TURN_DURATION = 1633; 
-
-  const playAction = (name: string, duration: number = 0.2) => {
-    const newAction = actions[name];
-    if (!newAction) return;
-    
-    if (currentAction.current && currentAction.current !== newAction) {
-      if (duration > 0) {
-        currentAction.current.fadeOut(duration);
-      } else {
-        currentAction.current.stop();
-      }
-    }
-    
-    newAction.reset();
-    newAction.setEffectiveTimeScale(1);
-    newAction.setEffectiveWeight(1);
-
-    if (name === 'rightturn') {
-      newAction.setLoop(THREE.LoopOnce, 1); 
-      newAction.clampWhenFinished = true;
-    } else {
-      newAction.setLoop(THREE.LoopRepeat, Infinity);
-      newAction.clampWhenFinished = false;
-    }
-
-    if (duration > 0) {
-      newAction.fadeIn(duration).play();
-    } else {
-      newAction.play();
-    }
-    
-    currentAction.current = newAction;
-  };
+  const timers = useRef<{ t1?: NodeJS.Timeout; t2?: NodeJS.Timeout }>({});
 
   useEffect(() => {
     scene.traverse((child) => {
@@ -193,87 +163,166 @@ function Newton({ position }: { position: [number, number, number] }) {
     });
   }, [scene]);
 
+  // ---- 安定版：stopしない / 常にどれかが効いてる状態を作る ----
+  const play = (
+    name: string,
+    opts?: {
+      fade?: number;
+      loopOnce?: boolean;
+      clamp?: boolean;
+      reset?: boolean;
+    }
+  ) => {
+    const a = actions?.[name];
+    if (!a) return;
+
+    const fade = opts?.fade ?? 0.12;
+    const loopOnce = opts?.loopOnce ?? false;
+    const clamp = opts?.clamp ?? false;
+    const doReset = opts?.reset ?? true;
+
+    if (doReset) a.reset();
+    a.enabled = true;
+    a.setEffectiveTimeScale(1);
+    a.setEffectiveWeight(1);
+
+    if (loopOnce) {
+      a.setLoop(THREE.LoopOnce, 1);
+      a.clampWhenFinished = clamp; // ターンは true 推奨
+    } else {
+      a.setLoop(THREE.LoopRepeat, Infinity);
+      a.clampWhenFinished = false;
+    }
+
+    a.play();
+
+    const prev = currentAction.current;
+    if (prev && prev !== a) {
+      // ★ stopしない。常にクロスフェードで繋ぐ（これがTポーズ対策の本丸）
+      prev.crossFadeTo(a, fade, false);
+    } else {
+      a.fadeIn(fade);
+    }
+
+    currentAction.current = a;
+  };
+
+  // 初期：idleを一度だけ再生（ベースを常に持つ）
   useEffect(() => {
-    let timeout1: NodeJS.Timeout;
-    let timeout2: NodeJS.Timeout;
-    let timeout3: NodeJS.Timeout;
+    if (!actions?.idle) return;
+    play('idle', { fade: 0.01, reset: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actions]);
+
+  useEffect(() => {
+    if (!mixer || !actions) return;
+
+    const clearAll = () => {
+      if (timers.current.t1) clearTimeout(timers.current.t1);
+      if (timers.current.t2) clearTimeout(timers.current.t2);
+      timers.current = {};
+    };
+
+    const rightTurn = actions['rightturn'];
+    const turnMs =
+      rightTurn?.getClip()?.duration != null
+        ? rightTurn.getClip().duration * 1000
+        : 1633;
+
+    const onFinished = (e: any) => {
+      // rightturn が終わった時だけ拾う
+      if (!rightTurn || e.action !== rightTurn) return;
+
+      if (phase.current === 'turnOut') {
+        // ★ rightturn は clampWhenFinished=true なので、終端姿勢を保持したまま回転できる
+        if (pivot.current) pivot.current.rotation.y += Math.PI;
+
+        phase.current = 'inspire';
+        play('inspiration', { fade: 0.12, reset: true });
+        setShowGravityBubble(true);
+
+        // ひらめき表示時間（元コードの6000ms）
+        timers.current.t2 = setTimeout(() => {
+          setShowGravityBubble(false);
+
+          phase.current = 'turnBack';
+          play('rightturn', { fade: 0.12, loopOnce: true, clamp: true, reset: true });
+          // turnBack終了はまた finished で拾う
+        }, 6000);
+      } else if (phase.current === 'turnBack') {
+        // ★ ここが「戻りのチラつき」ポイントだった箇所
+        // stopせず、rightturnの終端姿勢を保持したまま回転→idleへクロスフェード
+        if (pivot.current) pivot.current.rotation.y -= Math.PI;
+
+        phase.current = 'idle';
+        play('idle', { fade: 0.12, reset: true });
+
+        resetReaction();
+      }
+    };
+
+    mixer.addEventListener('finished', onFinished);
+
+    // ---- 反応シーケンス本体 ----
+    clearAll();
 
     if (newtonReaction === 'hatena') {
-      playAction('hatena', 0.2);
+      phase.current = 'hatena';
       setShowQuestionBubble(true);
-      
-      timeout1 = setTimeout(() => {
-        playAction('idle', 0.2);
+
+      play('hatena', { fade: 0.12, reset: true });
+
+      timers.current.t1 = setTimeout(() => {
         setShowQuestionBubble(false);
+        phase.current = 'idle';
+        play('idle', { fade: 0.12, reset: true });
         resetReaction();
       }, 4000);
-
     } else if (newtonReaction === 'turnAndInspiration') {
-      playAction('rightturn', 0.2); 
-      
-      timeout1 = setTimeout(() => {
-        if (group.current) group.current.rotation.y += Math.PI; 
-        playAction('inspiration', 0); 
-        
-        setShowGravityBubble(true);
-        
-        timeout2 = setTimeout(() => {
-          setShowGravityBubble(false);
-          playAction('rightturn', 0); 
+      phase.current = 'turnOut';
 
-          timeout3 = setTimeout(() => {
-            if (group.current) group.current.rotation.y -= Math.PI; 
-            playAction('idle', 0);
-            resetReaction();
-          }, TURN_DURATION);
+      // ターン開始
+      play('rightturn', { fade: 0.12, loopOnce: true, clamp: true, reset: true });
+      setShowQuestionBubble(false);
 
-        }, 6000);
-      }, TURN_DURATION);
-      
+      // 1回目のターン終わりは finished で拾う（TURN_DURATION の setTimeout は不要）
+      // ※ turnMs を使う必要はないが、ここで別演出を入れたいなら使える
+      // timers.current.t1 = setTimeout(() => {}, turnMs);
+
     } else {
-      playAction('idle', 0.2);
+      phase.current = 'idle';
       setShowQuestionBubble(false);
       setShowGravityBubble(false);
+      play('idle', { fade: 0.12, reset: false }); // idleは回しっぱなしでもOK
     }
 
     return () => {
-      clearTimeout(timeout1);
-      clearTimeout(timeout2);
-      clearTimeout(timeout3);
+      clearAll();
+      mixer.removeEventListener('finished', onFinished);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newtonReaction]); 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newtonReaction, actions, mixer]);
 
   return (
-    <group ref={group} position={position}>
-      <primitive object={scene} scale={1.8} />
-      
-      {/* 「？」吹き出し: サイズを14pxに縮小、borderRadiusを50pxにして丸っこく */}
+    <group ref={pivot} position={position}>
+      <group ref={rig}>
+        <primitive object={scene} scale={1.8} />
+      </group>
+
       {showQuestionBubble && (
         <Html position={[0, 2.6, 0]} center>
-          <div style={{
-            ...bubbleStyle, 
-            fontSize: '14px',           // 24px -> 14px (他と統一)
-            padding: '10px 14px',       // 他と統一
-            borderRadius: '50px'        // 丸っこくする
-          }}>
+          <div style={{ ...bubbleStyle, fontSize: '14px', padding: '10px 14px', borderRadius: '50px' }}>
             ？
             <div style={bubbleArrowStyle} />
           </div>
         </Html>
       )}
 
-      {/* 「引っ張られてたのかー！」吹き出し (基準サイズ: 14px / 10px 14px) */}
       {showGravityBubble && (
         <Html position={[0, 2.7, 0]} center>
-          <div style={{
-            ...bubbleStyle, 
-            fontSize: '14px', 
-            padding: '10px 14px', 
-            backgroundColor: '#fffacd'
-          }}>
+          <div style={{ ...bubbleStyle, fontSize: '14px', padding: '10px 14px', backgroundColor: '#fffacd' }}>
             引っ張られてたのかー！
-            <div style={{...bubbleArrowStyle, borderTopColor: '#fffacd'}} />
+            <div style={{ ...bubbleArrowStyle, borderTopColor: '#fffacd' }} />
           </div>
         </Html>
       )}
