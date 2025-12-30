@@ -135,7 +135,7 @@ function Neco({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 3. Newton (修正版: 戻りは手動回転で実装)
+// 3. Newton (修正版: アイドル再起動防止でカクつきを直す)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -152,12 +152,18 @@ function Newton({ position }: { position: [number, number, number] }) {
   const isRotatingBack = useRef(false);
   const rotatedAmount = useRef(0);
 
-  // 往路（後ろを向くとき）の時間
   const TURN_AWAY_DURATION = 1633;
 
   const playAction = (name: string, duration: number = 0.2) => {
     const newAction = actions[name];
     if (!newAction) return;
+    
+    // ★ここが修正のキモです！
+    // 「これから再生したいのがidle」で、かつ「今まさにidleを再生中」なら、
+    // 何もせずリターンします（リセットによるカクつきを防止）
+    if (name === 'idle' && currentAction.current === newAction && newAction.isRunning()) {
+      return;
+    }
     
     if (currentAction.current && currentAction.current !== newAction) {
       if (duration > 0) {
@@ -188,21 +194,23 @@ function Newton({ position }: { position: [number, number, number] }) {
     currentAction.current = newAction;
   };
 
-  // ★ここで「戻る時の回転」を毎フレーム処理する
+  // 戻りの手動回転処理
   useFrame((state, delta) => {
     if (isRotatingBack.current && group.current) {
-      // 1秒くらいで180度(Math.PI)回るスピード
+      // 1秒弱で180度回るスピード
       const speed = Math.PI / 0.8; 
       const step = speed * delta;
 
-      group.current.rotation.y -= step; // 回転させる
-      rotatedAmount.current += step;    // 回った量を記録
+      group.current.rotation.y -= step; 
+      rotatedAmount.current += step;
 
       // 180度回りきったら終了
       if (rotatedAmount.current >= Math.PI) {
-        // 角度をピッタリ0に戻して終了
         group.current.rotation.y = 0; 
         isRotatingBack.current = false;
+        
+        // ここでリセットを呼ぶと useEffect が走るが、
+        // 上の防止コードのおかげでアニメーションは途切れず続く
         resetReaction();
       }
     }
@@ -222,7 +230,6 @@ function Newton({ position }: { position: [number, number, number] }) {
     let timeout2: NodeJS.Timeout;
 
     if (newtonReaction === 'hatena') {
-      // --- パターンA ---
       playAction('hatena', 0.2);
       setShowQuestionBubble(true);
       
@@ -233,39 +240,32 @@ function Newton({ position }: { position: [number, number, number] }) {
       }, 4000);
 
     } else if (newtonReaction === 'turnAndInspiration') {
-      // --- パターンB ---
-      
       // 1. ターン開始
       playAction('rightturn', 0.2); 
       
       timeout1 = setTimeout(() => {
         // 2. 物理的に後ろを向く
         if (group.current) group.current.rotation.y += Math.PI; 
-        
         playAction('inspiration', 0); 
         setShowGravityBubble(true);
         
         timeout2 = setTimeout(() => {
           // 3. 戻り開始
           setShowGravityBubble(false);
-
-          // ★変更点: rightturnアニメはやめて、idleに戻す
+          // ここでidle再生開始
           playAction('idle', 0.2);
           
-          // 手動回転フラグをON
           rotatedAmount.current = 0;
           isRotatingBack.current = true;
-          
-          // 完了処理は useFrame の中で行われるので、ここでのTimeoutは不要
-
         }, 6000);
       }, TURN_AWAY_DURATION);
       
     } else {
+      // idle状態（ここが呼ばれても、既に再生中なら無視される）
       playAction('idle', 0.2);
       setShowQuestionBubble(false);
       setShowGravityBubble(false);
-      isRotatingBack.current = false; // 強制リセット
+      isRotatingBack.current = false;
     }
 
     return () => {
