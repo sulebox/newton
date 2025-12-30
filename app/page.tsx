@@ -30,7 +30,7 @@ interface GameContextType {
 const GameContext = createContext<GameContextType>({} as GameContextType);
 
 // =========================================================
-// Context Provider
+// Context Provider (修正版: 音声再生機能を追加)
 // =========================================================
 function GameProvider({ children }: { children: React.ReactNode }) {
   const [newtonReaction, setNewtonReaction] = useState<NewtonReaction>('idle');
@@ -38,6 +38,11 @@ function GameProvider({ children }: { children: React.ReactNode }) {
 
   const triggerReaction = () => {
     if (isPlaying) return;
+
+    // ★追加: ボタンを押した瞬間に音声を再生
+    const audio = new Audio('/newton.wav');
+    audio.volume = 1.0; // 音量 (0.0 〜 1.0)
+    audio.play().catch((e) => console.error("再生エラー:", e));
 
     setIsPlaying(true);
 
@@ -61,7 +66,6 @@ function GameProvider({ children }: { children: React.ReactNode }) {
     </GameContext.Provider>
   );
 }
-const useGame = () => useContext(GameContext);
 
 // =========================================================
 // 1. 背景と木
