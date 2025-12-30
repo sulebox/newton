@@ -91,7 +91,7 @@ function SceneEnvironment() {
 }
 
 // =========================================================
-// 2. Neco
+// 2. Neco (サイズ変更: 1.8 -> 1.44)
 // =========================================================
 function Neco({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -121,7 +121,8 @@ function Neco({ position }: { position: [number, number, number] }) {
 
   return (
     <group ref={group} position={position}>
-      <primitive object={scene} scale={1.8} />
+      {/* ★修正: Scaleを 1.8 * 0.8 = 1.44 に縮小 */}
+      <primitive object={scene} scale={1.44} />
       {showBubble && (
         <Html position={[0, 1.0, 0]} center>
           <div style={bubbleStyle}>
@@ -134,9 +135,8 @@ function Neco({ position }: { position: [number, number, number] }) {
   );
 }
 
-
 // =========================================================
-// 3. Newton (修正版: 往路・復路ともに「即時切り替え」を徹底)
+// 3. Newton (吹き出し修正)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -149,26 +149,23 @@ function Newton({ position }: { position: [number, number, number] }) {
   
   const currentAction = useRef<THREE.AnimationAction | null>(null);
 
-  // アニメーション時間 (1.633秒)
   const TURN_DURATION = 1633; 
 
   const playAction = (name: string, duration: number = 0.2) => {
     const newAction = actions[name];
     if (!newAction) return;
     
-    // ★ここが修正ポイント: duration=0 (即時) なら、前のアクションはフェードアウト待たずに即抹殺
     if (currentAction.current && currentAction.current !== newAction) {
       if (duration > 0) {
         currentAction.current.fadeOut(duration);
       } else {
-        currentAction.current.stop(); // 即停止！
+        currentAction.current.stop();
       }
     }
     
-    // 設定リセット
     newAction.reset();
     newAction.setEffectiveTimeScale(1);
-    newAction.setEffectiveWeight(1); // ★ウェイト100%を強制
+    newAction.setEffectiveWeight(1);
 
     if (name === 'rightturn') {
       newAction.setLoop(THREE.LoopOnce, 1); 
@@ -181,7 +178,7 @@ function Newton({ position }: { position: [number, number, number] }) {
     if (duration > 0) {
       newAction.fadeIn(duration).play();
     } else {
-      newAction.play(); // ★即再生（最初のフレームからウェイト100%）
+      newAction.play();
     }
     
     currentAction.current = newAction;
@@ -202,7 +199,6 @@ function Newton({ position }: { position: [number, number, number] }) {
     let timeout3: NodeJS.Timeout;
 
     if (newtonReaction === 'hatena') {
-      // --- パターンA ---
       playAction('hatena', 0.2);
       setShowQuestionBubble(true);
       
@@ -213,35 +209,21 @@ function Newton({ position }: { position: [number, number, number] }) {
       }, 4000);
 
     } else if (newtonReaction === 'turnAndInspiration') {
-      // --- パターンB ---
-      
-      // 1. ターン開始
       playAction('rightturn', 0.2); 
       
       timeout1 = setTimeout(() => {
-        // 2. 物理的に後ろを向く
         if (group.current) group.current.rotation.y += Math.PI; 
-        
-        // ★往路の切り替え: 即時100% (duration: 0)
         playAction('inspiration', 0); 
         
         setShowGravityBubble(true);
         
         timeout2 = setTimeout(() => {
-          // 3. 戻りターン開始
           setShowGravityBubble(false);
-          // ★ここも即時切り替えにしてみる (duration: 0)
-          // inspiration と rightturn のつなぎ目でズレるなら、ここも0にするのが正解です
           playAction('rightturn', 0); 
 
           timeout3 = setTimeout(() => {
-            // 4. 物理的に前を向く
             if (group.current) group.current.rotation.y -= Math.PI; 
-            
-            // ★復路の切り替え: 即時100% (duration: 0)
-            // これで「前のrightturn」は即stopされ、「idle」が即100%で入る
             playAction('idle', 0);
-            
             resetReaction();
           }, TURN_DURATION);
 
@@ -265,17 +247,31 @@ function Newton({ position }: { position: [number, number, number] }) {
   return (
     <group ref={group} position={position}>
       <primitive object={scene} scale={1.8} />
+      
+      {/* 「？」吹き出し: サイズを14pxに縮小、borderRadiusを50pxにして丸っこく */}
       {showQuestionBubble && (
         <Html position={[0, 2.6, 0]} center>
-          <div style={{...bubbleStyle, fontSize: '24px', padding: '8px 16px'}}>
+          <div style={{
+            ...bubbleStyle, 
+            fontSize: '14px',           // 24px -> 14px (他と統一)
+            padding: '10px 14px',       // 他と統一
+            borderRadius: '50px'        // 丸っこくする
+          }}>
             ？
             <div style={bubbleArrowStyle} />
           </div>
         </Html>
       )}
+
+      {/* 「引っ張られてたのかー！」吹き出し (基準サイズ: 14px / 10px 14px) */}
       {showGravityBubble && (
         <Html position={[0, 2.7, 0]} center>
-          <div style={{...bubbleStyle, fontSize: '14px', padding: '10px 14px', backgroundColor: '#fffacd'}}>
+          <div style={{
+            ...bubbleStyle, 
+            fontSize: '14px', 
+            padding: '10px 14px', 
+            backgroundColor: '#fffacd'
+          }}>
             引っ張られてたのかー！
             <div style={{...bubbleArrowStyle, borderTopColor: '#fffacd'}} />
           </div>
@@ -284,8 +280,6 @@ function Newton({ position }: { position: [number, number, number] }) {
     </group>
   );
 }
-
-
 
 // =========================================================
 // 4. Apple
@@ -383,12 +377,18 @@ function UIOverlay() {
         ニュートンに知らせる
       </button>
       
+      {/* 画面中央下の吹き出し: サイズを14pxに縮小して他と統一 */}
       <div style={{
         position: 'absolute', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
         zIndex: 15, pointerEvents: 'none',
         opacity: showBubble ? 1 : 0, transition: 'opacity 0.3s ease-in-out'
       }}>
-        <div style={{...bubbleStyle, fontSize: '18px', padding: '10px 20px', backgroundColor: '#fff0f0'}}>
+        <div style={{
+          ...bubbleStyle, 
+          fontSize: '14px',       // 18px -> 14px
+          padding: '10px 14px',   // 10px 20px -> 10px 14px
+          backgroundColor: '#fff0f0'
+        }}>
           ニュートンうしろー！
           <div style={{...bubbleArrowStyle, borderTopColor: '#fff0f0'}} />
         </div>
