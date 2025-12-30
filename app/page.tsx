@@ -91,7 +91,7 @@ function SceneEnvironment() {
 }
 
 // =========================================================
-// 2. Neco (サイズ変更: 1.8 -> 1.44)
+// 2. Neco
 // =========================================================
 function Neco({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -121,7 +121,6 @@ function Neco({ position }: { position: [number, number, number] }) {
 
   return (
     <group ref={group} position={position}>
-      {/* ★修正: Scaleを 1.8 * 0.8 = 1.44 に縮小 */}
       <primitive object={scene} scale={1.44} />
       {showBubble && (
         <Html position={[0, 1.0, 0]} center>
@@ -136,7 +135,7 @@ function Neco({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 3. Newton (吹き出し修正)
+// 3. Newton (修正版: 戻りは手動回転で実装)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -149,7 +148,12 @@ function Newton({ position }: { position: [number, number, number] }) {
   
   const currentAction = useRef<THREE.AnimationAction | null>(null);
 
-  const TURN_DURATION = 1633; 
+  // 手動回転用の状態
+  const isRotatingBack = useRef(false);
+  const rotatedAmount = useRef(0);
+
+  // 往路（後ろを向くとき）の時間
+  const TURN_AWAY_DURATION = 1633;
 
   const playAction = (name: string, duration: number = 0.2) => {
     const newAction = actions[name];
@@ -184,6 +188,26 @@ function Newton({ position }: { position: [number, number, number] }) {
     currentAction.current = newAction;
   };
 
+  // ★ここで「戻る時の回転」を毎フレーム処理する
+  useFrame((state, delta) => {
+    if (isRotatingBack.current && group.current) {
+      // 1秒くらいで180度(Math.PI)回るスピード
+      const speed = Math.PI / 0.8; 
+      const step = speed * delta;
+
+      group.current.rotation.y -= step; // 回転させる
+      rotatedAmount.current += step;    // 回った量を記録
+
+      // 180度回りきったら終了
+      if (rotatedAmount.current >= Math.PI) {
+        // 角度をピッタリ0に戻して終了
+        group.current.rotation.y = 0; 
+        isRotatingBack.current = false;
+        resetReaction();
+      }
+    }
+  });
+
   useEffect(() => {
     scene.traverse((child) => {
       if ((child as THREE.Mesh).isMesh) {
@@ -196,9 +220,9 @@ function Newton({ position }: { position: [number, number, number] }) {
   useEffect(() => {
     let timeout1: NodeJS.Timeout;
     let timeout2: NodeJS.Timeout;
-    let timeout3: NodeJS.Timeout;
 
     if (newtonReaction === 'hatena') {
+      // --- パターンA ---
       playAction('hatena', 0.2);
       setShowQuestionBubble(true);
       
@@ -208,40 +232,45 @@ function Newton({ position }: { position: [number, number, number] }) {
         resetReaction();
       }, 4000);
 
-} else if (newtonReaction === 'turnAndInspiration') {
+    } else if (newtonReaction === 'turnAndInspiration') {
+      // --- パターンB ---
+      
+      // 1. ターン開始
       playAction('rightturn', 0.2); 
       
       timeout1 = setTimeout(() => {
+        // 2. 物理的に後ろを向く
         if (group.current) group.current.rotation.y += Math.PI; 
-        playAction('inspiration', 0); 
         
+        playAction('inspiration', 0); 
         setShowGravityBubble(true);
         
         timeout2 = setTimeout(() => {
+          // 3. 戻り開始
           setShowGravityBubble(false);
-          
-          // 戻るときはグループを先に0度に戻してからアニメーション再生
-          if (group.current) group.current.rotation.y = 0;
-          playAction('rightturn', 0);
 
-          timeout3 = setTimeout(() => {
-            playAction('idle', 0);
-            resetReaction();
-          }, TURN_DURATION);
+          // ★変更点: rightturnアニメはやめて、idleに戻す
+          playAction('idle', 0.2);
+          
+          // 手動回転フラグをON
+          rotatedAmount.current = 0;
+          isRotatingBack.current = true;
+          
+          // 完了処理は useFrame の中で行われるので、ここでのTimeoutは不要
 
         }, 6000);
-      }, TURN_DURATION);
+      }, TURN_AWAY_DURATION);
       
     } else {
       playAction('idle', 0.2);
       setShowQuestionBubble(false);
       setShowGravityBubble(false);
+      isRotatingBack.current = false; // 強制リセット
     }
 
     return () => {
       clearTimeout(timeout1);
       clearTimeout(timeout2);
-      clearTimeout(timeout3);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newtonReaction]); 
@@ -249,23 +278,19 @@ function Newton({ position }: { position: [number, number, number] }) {
   return (
     <group ref={group} position={position}>
       <primitive object={scene} scale={1.8} />
-      
-      {/* 「？」吹き出し: サイズを14pxに縮小、borderRadiusを50pxにして丸っこく */}
       {showQuestionBubble && (
         <Html position={[0, 2.6, 0]} center>
           <div style={{
             ...bubbleStyle, 
-            fontSize: '14px',           // 24px -> 14px (他と統一)
-            padding: '10px 14px',       // 他と統一
-            borderRadius: '50px'        // 丸っこくする
+            fontSize: '14px', 
+            padding: '10px 14px', 
+            borderRadius: '50px'
           }}>
             ？
             <div style={bubbleArrowStyle} />
           </div>
         </Html>
       )}
-
-      {/* 「引っ張られてたのかー！」吹き出し (基準サイズ: 14px / 10px 14px) */}
       {showGravityBubble && (
         <Html position={[0, 2.7, 0]} center>
           <div style={{
@@ -379,7 +404,6 @@ function UIOverlay() {
         ニュートンに知らせる
       </button>
       
-      {/* 画面中央下の吹き出し: サイズを14pxに縮小して他と統一 */}
       <div style={{
         position: 'absolute', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
         zIndex: 15, pointerEvents: 'none',
@@ -387,8 +411,8 @@ function UIOverlay() {
       }}>
         <div style={{
           ...bubbleStyle, 
-          fontSize: '14px',       // 18px -> 14px
-          padding: '10px 14px',   // 10px 20px -> 10px 14px
+          fontSize: '14px', 
+          padding: '10px 14px', 
           backgroundColor: '#fff0f0'
         }}>
           ニュートンうしろー！
