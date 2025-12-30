@@ -135,7 +135,7 @@ function Neco({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 3. Newton (修正版: チラつき防止強化)
+// 3. Newton (修正版: 正攻法のクロスフェード実装)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -148,14 +148,15 @@ function Newton({ position }: { position: [number, number, number] }) {
   
   const currentAction = useRef<THREE.AnimationAction | null>(null);
 
-  // ★修正ポイント1: アニメーション時間を少し短めに設定して「食い気味」に切り替える
-  // 1630msだと終わった直後に一瞬戻る隙間ができるので、1550msくらいで強制切り替えします
-  const TURN_DURATION = 1550; 
+  // 時間調整: 少しだけ短めにして切り替えをスムーズに
+  const TURN_DURATION = 1580; 
 
-  const playAction = (name: string, duration: number = 0.5) => {
+  const playAction = (name: string, duration: number = 0.2) => {
     const newAction = actions[name];
     if (!newAction) return;
     
+    // ★ここが重要: stop()せず、前のアクションをフェードアウトさせる
+    // これにより、常にどちらかのアクションが有効になり、Tポーズが一瞬たりとも見えなくなる
     if (currentAction.current && currentAction.current !== newAction) {
       currentAction.current.fadeOut(duration);
     }
@@ -172,6 +173,7 @@ function Newton({ position }: { position: [number, number, number] }) {
       newAction.clampWhenFinished = false;
     }
 
+    // 新しいアクションをフェードイン
     newAction.fadeIn(duration).play();
     currentAction.current = newAction;
   };
@@ -208,20 +210,11 @@ function Newton({ position }: { position: [number, number, number] }) {
       playAction('rightturn', 0.2); 
       
       timeout1 = setTimeout(() => {
-        // ★修正ポイント2: 切り替えの瞬間に一瞬隠す（1フレームのチラつき防止）
-        if (group.current) group.current.visible = false;
-
-        // アニメーション即停止
-        if (actions['rightturn']) actions['rightturn'].stop();
-        if (currentAction.current === actions['rightturn']) currentAction.current = null;
-
-        // 物理的に後ろを向く
+        // ★修正: visible切り替えやstop()のハックを全削除
+        // 物理的に後ろを向く（これとクロスフェードが混ざることで、くるっと回るように見えるのを防ぐ）
         if (group.current) group.current.rotation.y += Math.PI; 
         
-        // 即座に再表示（人間の目には見えない速さで切り替わる）
-        if (group.current) group.current.visible = true;
-
-        // ひらめき再生
+        // ひらめき再生（自動的にrightturnをフェードアウトしてくれる）
         playAction('inspiration', 0.2);
         setShowGravityBubble(true);
         
@@ -231,16 +224,8 @@ function Newton({ position }: { position: [number, number, number] }) {
           playAction('rightturn', 0.2);
 
           timeout3 = setTimeout(() => {
-            // ★修正ポイント3: 戻る時も同様に一瞬隠す
-            if (group.current) group.current.visible = false;
-
-            if (actions['rightturn']) actions['rightturn'].stop();
-            if (currentAction.current === actions['rightturn']) currentAction.current = null;
-
-            // 物理的に前を向く
+            // 4. 物理的に前を向く
             if (group.current) group.current.rotation.y -= Math.PI; 
-            
-            if (group.current) group.current.visible = true;
             
             // アイドルへ戻る
             playAction('idle', 0.5);
@@ -457,7 +442,7 @@ function AppContent() {
 }
 
 // =========================================================
-// ★export default
+// export default
 // =========================================================
 export default function Home() {
   return (
