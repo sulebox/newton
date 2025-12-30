@@ -135,7 +135,7 @@ function Neco({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 3. Newton (修正版: stopを使わず、即時100%ウェイトで上書きする)
+// 3. Newton (修正版: 時間1.633秒 & 戻りチラつき防止の隠し味追加)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -148,22 +148,19 @@ function Newton({ position }: { position: [number, number, number] }) {
   
   const currentAction = useRef<THREE.AnimationAction | null>(null);
 
-  const TURN_DURATION = 1580; 
+  // ★ご要望通り、アニメーションの長さを正確に設定
+  const TURN_DURATION = 1633; 
 
-  // アニメーション再生関数
   const playAction = (name: string, duration: number = 0.2) => {
     const newAction = actions[name];
     if (!newAction) return;
     
-    // すでに別のアクションが動いていたら処理
+    // クロスフェード処理
     if (currentAction.current && currentAction.current !== newAction) {
       if (duration > 0) {
         currentAction.current.fadeOut(duration);
       } else {
-        // ★ご提案の実装: stop()は使わず、単にウェイトを0にするか、
-        // 次のアクションが即座に上書きするので、ここは「何もしない」か「stop」でも良いのですが、
-        // 念の為 stop() してリソースを解放します。
-        // ただし、重要なのは「この直後に newAction が即座に適用されること」です。
+        // 即時切り替えの場合は、前の動作を即停止
         currentAction.current.stop();
       }
     }
@@ -171,22 +168,19 @@ function Newton({ position }: { position: [number, number, number] }) {
     // 設定リセット
     newAction.reset();
     newAction.setEffectiveTimeScale(1);
-    newAction.setEffectiveWeight(1); // ★確実にウェイト100%にする
+    newAction.setEffectiveWeight(1);
 
-    // ループ設定
     if (name === 'rightturn') {
       newAction.setLoop(THREE.LoopOnce, 1); 
-      newAction.clampWhenFinished = true;
+      newAction.clampWhenFinished = true; // 終わったら最後の姿勢で待機
     } else {
       newAction.setLoop(THREE.LoopRepeat, Infinity);
       newAction.clampWhenFinished = false;
     }
 
-    // 再生
     if (duration > 0) {
       newAction.fadeIn(duration).play();
     } else {
-      // ★duration:0 の時はフェードなしで「即」再生
       newAction.play();
     }
     
@@ -208,7 +202,7 @@ function Newton({ position }: { position: [number, number, number] }) {
     let timeout3: NodeJS.Timeout;
 
     if (newtonReaction === 'hatena') {
-      // --- パターンA: hatena ---
+      // --- パターンA ---
       playAction('hatena', 0.2);
       setShowQuestionBubble(true);
       
@@ -219,34 +213,38 @@ function Newton({ position }: { position: [number, number, number] }) {
       }, 4000);
 
     } else if (newtonReaction === 'turnAndInspiration') {
-      // --- パターンB: ターン -> ひらめき -> 戻りターン ---
+      // --- パターンB ---
       
       // 1. ターン開始
       playAction('rightturn', 0.2); 
       
       timeout1 = setTimeout(() => {
-        // 2. 物理的に後ろを向く
+        // 2. 物理的に後ろを向く (即時切り替え)
         if (group.current) group.current.rotation.y += Math.PI; 
-        
-        // ★修正: 手動stopは削除。playAction(..., 0) に任せる
-        // これで「後ろ向きの余韻」を「ひらめき(正面)」が即座に上書きする
         playAction('inspiration', 0); 
         
         setShowGravityBubble(true);
         
         timeout2 = setTimeout(() => {
-          // 3. 戻りターン開始
+          // 3. 戻りターン開始 (即時切り替え)
           setShowGravityBubble(false);
-          // ここも即時切り替え
           playAction('rightturn', 0); 
 
           timeout3 = setTimeout(() => {
+            // ★ここが修正ポイント: チラつき防止の「一瞬透明化」
+            // 処理順序: 隠す -> 回転戻す -> アニメ戻す -> 表示する
+            if (group.current) group.current.visible = false;
+
             // 4. 物理的に前を向く
             if (group.current) group.current.rotation.y -= Math.PI; 
             
-            // ★修正: ここも手動stop削除。playAction(..., 0) に任せる
-            // rightturn(アニメ上の後ろ向き) を idle(アニメ上の正面) が即座に上書きする
+            // アイドルへ戻る (即時)
             playAction('idle', 0);
+            
+            // 次の描画フレームには間に合うようにすぐ戻す（人間の目には見えない）
+            requestAnimationFrame(() => {
+                if (group.current) group.current.visible = true;
+            });
             
             resetReaction();
           }, TURN_DURATION);
@@ -255,7 +253,6 @@ function Newton({ position }: { position: [number, number, number] }) {
       }, TURN_DURATION);
       
     } else {
-      // idle状態
       playAction('idle', 0.2);
       setShowQuestionBubble(false);
       setShowGravityBubble(false);
