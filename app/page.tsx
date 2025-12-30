@@ -30,7 +30,7 @@ interface GameContextType {
 const GameContext = createContext<GameContextType>({} as GameContextType);
 
 // =========================================================
-// Context Provider (修正版: 音声再生機能を追加)
+// Context Provider (音声機能付き)
 // =========================================================
 function GameProvider({ children }: { children: React.ReactNode }) {
   const [newtonReaction, setNewtonReaction] = useState<NewtonReaction>('idle');
@@ -39,10 +39,13 @@ function GameProvider({ children }: { children: React.ReactNode }) {
   const triggerReaction = () => {
     if (isPlaying) return;
 
-    // ★追加: ボタンを押した瞬間に音声を再生
-    const audio = new Audio('/newton.wav');
-    audio.volume = 1.0; // 音量 (0.0 〜 1.0)
-    audio.play().catch((e) => console.error("再生エラー:", e));
+    // ★音声再生機能
+    // ブラウザ環境でのみ実行するためのガード
+    if (typeof window !== 'undefined') {
+      const audio = new Audio('/newton.wav');
+      audio.volume = 1.0; 
+      audio.play().catch((e) => console.error("再生エラー:", e));
+    }
 
     setIsPlaying(true);
 
@@ -66,6 +69,9 @@ function GameProvider({ children }: { children: React.ReactNode }) {
     </GameContext.Provider>
   );
 }
+
+// ★★★ 重要: この行が消えるとエラーになります！ ★★★
+const useGame = () => useContext(GameContext);
 
 // =========================================================
 // 1. 背景と木
@@ -95,7 +101,7 @@ function SceneEnvironment() {
 }
 
 // =========================================================
-// 2. Neco
+// 2. Neco (サイズ: 1.44)
 // =========================================================
 function Neco({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -139,7 +145,7 @@ function Neco({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 3. Newton (修正版: アイドル再起動防止でカクつきを直す)
+// 3. Newton (カクつき防止・チラつき防止版)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -162,9 +168,7 @@ function Newton({ position }: { position: [number, number, number] }) {
     const newAction = actions[name];
     if (!newAction) return;
     
-    // ★ここが修正のキモです！
-    // 「これから再生したいのがidle」で、かつ「今まさにidleを再生中」なら、
-    // 何もせずリターンします（リセットによるカクつきを防止）
+    // カクつき防止：既に同じアクションが実行中なら何もしない
     if (name === 'idle' && currentAction.current === newAction && newAction.isRunning()) {
       return;
     }
@@ -201,20 +205,15 @@ function Newton({ position }: { position: [number, number, number] }) {
   // 戻りの手動回転処理
   useFrame((state, delta) => {
     if (isRotatingBack.current && group.current) {
-      // 1秒弱で180度回るスピード
       const speed = Math.PI / 0.8; 
       const step = speed * delta;
 
       group.current.rotation.y -= step; 
       rotatedAmount.current += step;
 
-      // 180度回りきったら終了
       if (rotatedAmount.current >= Math.PI) {
         group.current.rotation.y = 0; 
         isRotatingBack.current = false;
-        
-        // ここでリセットを呼ぶと useEffect が走るが、
-        // 上の防止コードのおかげでアニメーションは途切れず続く
         resetReaction();
       }
     }
@@ -256,7 +255,7 @@ function Newton({ position }: { position: [number, number, number] }) {
         timeout2 = setTimeout(() => {
           // 3. 戻り開始
           setShowGravityBubble(false);
-          // ここでidle再生開始
+          // idleに戻す
           playAction('idle', 0.2);
           
           rotatedAmount.current = 0;
@@ -265,7 +264,6 @@ function Newton({ position }: { position: [number, number, number] }) {
       }, TURN_AWAY_DURATION);
       
     } else {
-      // idle状態（ここが呼ばれても、既に再生中なら無視される）
       playAction('idle', 0.2);
       setShowQuestionBubble(false);
       setShowGravityBubble(false);
