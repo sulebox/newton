@@ -30,7 +30,7 @@ interface GameContextType {
 const GameContext = createContext<GameContextType>({} as GameContextType);
 
 // =========================================================
-// Context Provider (音声機能付き)
+// Context Provider
 // =========================================================
 function GameProvider({ children }: { children: React.ReactNode }) {
   const [newtonReaction, setNewtonReaction] = useState<NewtonReaction>('idle');
@@ -39,8 +39,6 @@ function GameProvider({ children }: { children: React.ReactNode }) {
   const triggerReaction = () => {
     if (isPlaying) return;
 
-    // ★音声再生機能
-    // ブラウザ環境でのみ実行するためのガード
     if (typeof window !== 'undefined') {
       const audio = new Audio('/newton.wav');
       audio.volume = 1.0; 
@@ -49,7 +47,6 @@ function GameProvider({ children }: { children: React.ReactNode }) {
 
     setIsPlaying(true);
 
-    // 7割 hatena, 3割 turnAndInspiration
     const rand = Math.random();
     if (rand < 0.7) {
       setNewtonReaction('hatena');
@@ -70,7 +67,6 @@ function GameProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ★★★ 重要: この行が消えるとエラーになります！ ★★★
 const useGame = () => useContext(GameContext);
 
 // =========================================================
@@ -101,7 +97,7 @@ function SceneEnvironment() {
 }
 
 // =========================================================
-// 2. Neco (サイズ: 1.44)
+// 2. Neco
 // =========================================================
 function Neco({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -145,7 +141,7 @@ function Neco({ position }: { position: [number, number, number] }) {
 }
 
 // =========================================================
-// 3. Newton (カクつき防止・チラつき防止版)
+// 3. Newton (修正版: 「！」→1秒後ターン)
 // =========================================================
 function Newton({ position }: { position: [number, number, number] }) {
   const group = useRef<THREE.Group>(null);
@@ -154,11 +150,10 @@ function Newton({ position }: { position: [number, number, number] }) {
   const { newtonReaction, resetReaction } = useGame(); 
   
   const [showQuestionBubble, setShowQuestionBubble] = useState(false);
+  const [showExclamationBubble, setShowExclamationBubble] = useState(false); // ★追加: 「！」用
   const [showGravityBubble, setShowGravityBubble] = useState(false);
   
   const currentAction = useRef<THREE.AnimationAction | null>(null);
-
-  // 手動回転用の状態
   const isRotatingBack = useRef(false);
   const rotatedAmount = useRef(0);
 
@@ -168,7 +163,7 @@ function Newton({ position }: { position: [number, number, number] }) {
     const newAction = actions[name];
     if (!newAction) return;
     
-    // カクつき防止：既に同じアクションが実行中なら何もしない
+    // カクつき防止ガード
     if (name === 'idle' && currentAction.current === newAction && newAction.isRunning()) {
       return;
     }
@@ -202,7 +197,6 @@ function Newton({ position }: { position: [number, number, number] }) {
     currentAction.current = newAction;
   };
 
-  // 戻りの手動回転処理
   useFrame((state, delta) => {
     if (isRotatingBack.current && group.current) {
       const speed = Math.PI / 0.8; 
@@ -229,6 +223,7 @@ function Newton({ position }: { position: [number, number, number] }) {
   }, [scene]);
 
   useEffect(() => {
+    let timeout0: NodeJS.Timeout; // ★追加
     let timeout1: NodeJS.Timeout;
     let timeout2: NodeJS.Timeout;
 
@@ -243,34 +238,47 @@ function Newton({ position }: { position: [number, number, number] }) {
       }, 4000);
 
     } else if (newtonReaction === 'turnAndInspiration') {
-      // 1. ターン開始
-      playAction('rightturn', 0.2); 
+      // ---------------------------------------------
+      // 修正フロー
+      // ---------------------------------------------
       
-      timeout1 = setTimeout(() => {
-        // 2. 物理的に後ろを向く
-        if (group.current) group.current.rotation.y += Math.PI; 
-        playAction('inspiration', 0); 
-        setShowGravityBubble(true);
+      // 1. 最初は idle のまま、「！」を表示（1秒間）
+      playAction('idle', 0.2);
+      setShowExclamationBubble(true);
+
+      timeout0 = setTimeout(() => {
+        // 2. 1秒後：「！」を消して、ターン開始
+        setShowExclamationBubble(false);
+        playAction('rightturn', 0.2);
         
-        timeout2 = setTimeout(() => {
-          // 3. 戻り開始
-          setShowGravityBubble(false);
-          // idleに戻す
-          playAction('idle', 0.2);
+        timeout1 = setTimeout(() => {
+          // 3. ターン完了後：物理回転 & ひらめき
+          if (group.current) group.current.rotation.y += Math.PI; 
+          playAction('inspiration', 0); 
+          setShowGravityBubble(true);
           
-          rotatedAmount.current = 0;
-          isRotatingBack.current = true;
-        }, 6000);
-      }, TURN_AWAY_DURATION);
+          timeout2 = setTimeout(() => {
+            // 4. 戻り開始
+            setShowGravityBubble(false);
+            playAction('idle', 0.2);
+            
+            rotatedAmount.current = 0;
+            isRotatingBack.current = true;
+          }, 6000);
+        }, TURN_AWAY_DURATION);
+
+      }, 1000); // 最初の1秒待ち
       
     } else {
       playAction('idle', 0.2);
       setShowQuestionBubble(false);
+      setShowExclamationBubble(false);
       setShowGravityBubble(false);
       isRotatingBack.current = false;
     }
 
     return () => {
+      clearTimeout(timeout0);
       clearTimeout(timeout1);
       clearTimeout(timeout2);
     };
@@ -280,6 +288,8 @@ function Newton({ position }: { position: [number, number, number] }) {
   return (
     <group ref={group} position={position}>
       <primitive object={scene} scale={1.8} />
+      
+      {/* 「？」吹き出し */}
       {showQuestionBubble && (
         <Html position={[0, 2.6, 0]} center>
           <div style={{
@@ -293,6 +303,23 @@ function Newton({ position }: { position: [number, number, number] }) {
           </div>
         </Html>
       )}
+
+      {/* ★追加: 「！」吹き出し（デザインは？と同じ） */}
+      {showExclamationBubble && (
+        <Html position={[0, 2.6, 0]} center>
+          <div style={{
+            ...bubbleStyle, 
+            fontSize: '14px', 
+            padding: '10px 14px', 
+            borderRadius: '50px'
+          }}>
+            ！
+            <div style={bubbleArrowStyle} />
+          </div>
+        </Html>
+      )}
+
+      {/* 「引っ張られてたのかー！」吹き出し */}
       {showGravityBubble && (
         <Html position={[0, 2.7, 0]} center>
           <div style={{
